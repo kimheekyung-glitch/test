@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>엑셀 추출 지원 수당 계산기</title>
+    <style>
+        body { font-family: 'Apple SD Gothic Neo', sans-serif; background-color: #f4f7f6; padding: 20px; color: #333; display: flex; justify-content: center; }
+        .container { width: 100%; max-width: 500px; }
+        .calculator, .history-board { background: white; padding: 25px; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); margin-bottom: 20px; position: relative; }
+        h2 { text-align: center; margin-top: 0; color: #2c3e50; }
+        .input-group { margin-bottom: 12px; display: flex; align-items: center; }
+        .input-group label { width: 100px; font-weight: bold; }
+        .input-group input { flex: 1; padding: 10px; border: 1px solid #ccc; border-radius: 6px; }
+        
+        /* 토스트 알림 */
+        #toast {
+            visibility: hidden; min-width: 250px; background-color: #333; color: #fff; text-align: center;
+            border-radius: 8px; padding: 16px; position: fixed; z-index: 1000; left: 50%; bottom: 30px;
+            transform: translateX(-50%); font-size: 14px;
+        }
+        #toast.show { visibility: visible; animation: fadein 0.5s, fadeout 0.5s 2.5s; }
+        @keyframes fadein { from {bottom: 0; opacity: 0;} to {bottom: 30px; opacity: 1;} }
+        @keyframes fadeout { from {bottom: 30px; opacity: 1;} to {bottom: 0; opacity: 0;} }
+
+        .result-box { margin-top: 20px; padding: 15px; background: #eef2f5; border-radius: 8px; }
+        .result-item { display: flex; justify-content: space-between; margin-bottom: 6px; }
+        .total { font-weight: bold; border-top: 2px solid #ccc; padding-top: 10px; margin-top: 10px; }
+        
+        .btn-save { width: 100%; padding: 12px; background: #3498db; color: white; border: none; border-radius: 6px; font-weight: bold; cursor: pointer; margin-bottom: 10px; }
+        .btn-excel { width: 100%; padding: 12px; background: #27ae60; color: white; border: none; border-radius: 6px; font-weight: bold; cursor: pointer; margin-top: 10px; display: flex; align-items: center; justify-content: center; gap: 8px; }
+        
+        #confirmUI { display: none; background: #fff3cd; padding: 15px; border-radius: 8px; margin-top: 10px; text-align: center; border: 1px solid #ffeeba; }
+        .btn-confirm { background: #e67e22; color: white; border: none; padding: 8px 15px; border-radius: 4px; margin: 5px; cursor: pointer; }
+        .btn-cancel { background: #95a5a6; color: white; border: none; padding: 8px 15px; border-radius: 4px; margin: 5px; cursor: pointer; }
+
+        .history-item { background: #fafafa; border: 1px solid #eee; border-radius: 8px; padding: 12px; margin-bottom: 10px; position: relative; }
+        .history-date { font-weight: bold; color: #2980b9; }
+        .history-pay { font-weight: bold; color: #27ae60; }
+        .btn-delete { position: absolute; top: 12px; right: 12px; background: #e74c3c; color: white; border: none; border-radius: 4px; padding: 4px 8px; font-size: 0.8em; }
+        .summary-box { background: #fff3cd; color: #856404; padding: 15px; border-radius: 8px; text-align: center; font-weight: bold; border: 2px dashed #ffeeba; margin-bottom: 15px; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <div class="calculator">
+        <h2>🕒 일일 수당 계산기</h2>
+        <div class="input-group">
+            <label>근무 일자</label>
+            <input type="date" id="workDate" onchange="calculate()">
+        </div>
+        <div class="input-group">
+            <label>출근 시간</label>
+            <input type="time" id="inTime" value="09:00" oninput="calculate()">
+        </div>
+        <div class="input-group">
+            <label>퇴근 시간</label>
+            <input type="time" id="outTime" value="18:00" oninput="calculate()">
+        </div>
+        <div class="input-group">
+            <label>기본 시급</label>
+            <input type="number" id="wage" value="9860" oninput="calculate()">
+        </div>
+
+        <div class="result-box">
+            <div class="result-item"><span>실제 근무 (휴게 제외):</span> <span id="resActualHours">0시간</span></div>
+            <div class="result-item"><span>초과 근무 시간:</span> <span id="resOvertimeHours">0시간</span></div>
+            <div class="total result-item"><span>총 예상 일급:</span> <span id="resTotalPay">0원</span></div>
+        </div>
+
+        <button id="mainSaveBtn" class="btn-save" onclick="handleSave()">💾 이 날짜 기록 저장하기</button>
+        
+        <div id="confirmUI">
+            <div>해당 날짜에 이미 기록이 있습니다.<br>덮어씌우시겠습니까?</div>
+            <button class="btn-confirm" onclick="executeSave(true)">예, 덮어씌웁니다</button>
+            <button class="btn-cancel" onclick="closeConfirm()">아니오</button>
+        </div>
+    </div>
+
+    <div class="history-board">
+        <h2>📂 저장된 근무 내역</h2>
+        <div id="summaryContainer"></div>
+        <div id="historyList"></div>
+        <button id="excelBtn" class="btn-excel" onclick="downloadExcel()" style="display:none;">📊 엑셀 파일로 내보내기</button>
+    </div>
+</div>
+
+<div id="toast">메시지 내용</div>
+
+<script>
+    const today = new Date();
+    const localDate = new Date(today.getTime() - (today.getTimezoneOffset() * 60000)).toISOString().split('T')[0];
+    document.getElementById('workDate').value = localDate;
+
+    let currentResult = {};
+
+    function showToast(msg) {
+        const toast = document.getElementById("toast");
+        toast.innerText = msg;
+        toast.className = "show";
+        setTimeout(() => { toast.className = toast.className.replace("show", ""); }, 3000);
+    }
+
+    function calculate() {
+        const date = document.getElementById('workDate').value;
+        const inTime = document.getElementById('inTime').value;
+        const outTime = document.getElementById('outTime').value;
+        const wage = parseFloat(document.getElementById('wage').value) || 0;
+
+        let inDate = new Date(`1970-01-01T${inTime}:00`);
+        let outDate = new Date(`1970-01-01T${outTime}:00`);
+        if (outDate < inDate) outDate.setDate(outDate.getDate() + 1);
+
+        let totalHours = (outDate - inDate) / (1000 * 60 * 60);
+        let actualHours = Math.max(0, totalHours - 1); 
+        let regularHours = Math.min(8, actualHours);
+        let overtimeHours = Math.max(0, actualHours - 8);
+
+        let regularPay = regularHours * wage;
+        let overtimePay = overtimeHours * wage * 1.5;
+        let totalPay = Math.floor(regularPay + overtimePay);
+
+        document.getElementById('resActualHours').innerText = actualHours.toFixed(1) + "시간";
+        document.getElementById('resOvertimeHours').innerText = overtimeHours.toFixed(1) + "시간";
+        document.getElementById('resTotalPay').innerText = totalPay.toLocaleString() + "원";
+
+        currentResult = { id: Date.now(), date, inTime, outTime, actualHours: actualHours.toFixed(1), overtimeHours: overtimeHours.toFixed(1), overtimePay: Math.floor(overtimePay), totalPay };
+    }
+
+    function handleSave() {
+        let savedData = JSON.parse(localStorage.getItem('workHistory')) || [];
+        const exists = savedData.some(item => item.date === currentResult.date);
+        if (exists) {
+            document.getElementById('confirmUI').style.display = 'block';
+            document.getElementById('mainSaveBtn').style.display = 'none';
+        } else {
+            executeSave(false);
+        }
+    }
+
+    function closeConfirm() {
+        document.getElementById('confirmUI').style.display = 'none';
+        document.getElementById('mainSaveBtn').style.display = 'block';
+    }
+
+    function executeSave(isOverwrite) {
+        let savedData = JSON.parse(localStorage.getItem('workHistory')) || [];
+        if (isOverwrite) {
+            savedData = savedData.filter(item => item.date !== currentResult.date);
+        }
+        savedData.push(currentResult);
+        savedData.sort((a, b) => new Date(b.date) - new Date(a.date));
+        localStorage.setItem('workHistory', JSON.stringify(savedData));
+        
+        renderHistory();
+        closeConfirm();
+        showToast("✅ 기록이 저장되었습니다!");
+    }
+
+    function deleteData(id) {
+        let savedData = JSON.parse(localStorage.getItem('workHistory')) || [];
+        savedData = savedData.filter(item => item.id !== id);
+        localStorage.setItem('workHistory', JSON.stringify(savedData));
+        renderHistory();
+        showToast("🗑️ 기록이 삭제되었습니다.");
+    }
+
+    function renderHistory() {
+        let savedData = JSON.parse(localStorage.getItem('workHistory')) || [];
+        const historyList = document.getElementById('historyList');
+        const summaryContainer = document.getElementById('summaryContainer');
+        const excelBtn = document.getElementById('excelBtn');
+
+        historyList.innerHTML = '';
+        summaryContainer.innerHTML = '';
+
+        if (savedData.length === 0) {
+            historyList.innerHTML = '<div class="empty-msg">저장된 내역이 없습니다.</div>';
+            excelBtn.style.display = 'none';
+            return;
+        }
+
+        excelBtn.style.display = 'block';
+        let totalOvertimeSum = 0;
+        savedData.forEach(item => {
+            totalOvertimeSum += (item.overtimePay || 0);
+            const div = document.createElement('div');
+            div.className = 'history-item';
+            div.innerHTML = `
+                <button class="btn-delete" onclick="deleteData(${item.id})">삭제</button>
+                <div class="history-date">📅 ${item.date}</div>
+                <div class="history-details">시간: ${item.inTime}~${item.outTime} (${item.actualHours}h) / 초과: ${item.overtimeHours}h</div>
+                <div class="history-pay">일급: ${item.totalPay.toLocaleString()}원</div>
+            `;
+            historyList.appendChild(div);
+        });
+
+        if (totalOvertimeSum > 0) {
+            summaryContainer.innerHTML = `<div class="summary-box">💰 누적 초과 수당 합계: ${totalOvertimeSum.toLocaleString()}원</div>`;
+        }
+    }
+
+    // [신규] 엑셀 다운로드 함수
+    function downloadExcel() {
+        let savedData = JSON.parse(localStorage.getItem('workHistory')) || [];
+        if (savedData.length === 0) return;
+
+        // CSV 헤더
+        let csvContent = "\uFEFF"; // 한글 깨짐 방지 BOM
+        csvContent += "날짜,출근시간,퇴근시간,실제근무(시간),초과근무(시간),초과수당(원),총일급(원)\n";
+
+        // 데이터 채우기
+        savedData.forEach(item => {
+            let row = `${item.date},${item.inTime},${item.outTime},${item.actualHours},${item.overtimeHours},${item.overtimePay},${item.totalPay}\n`;
+            csvContent += row;
+        });
+
+        // 파일 다운로드 트리거
+        const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        const fileName = `근무내역_${new Date().toISOString().split('T')[0]}.csv`;
+        
+        link.setAttribute("href", url);
+        link.setAttribute("download", fileName);
+        link.style.visibility = 'hidden';
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        
+        showToast("📊 엑셀 파일 다운로드를 시작합니다.");
+    }
+
+    calculate();
+    renderHistory();
+</script>
+
+</body>
+</html>
